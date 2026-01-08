@@ -1,0 +1,145 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'version.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      tag_exists: ${{ steps.check_tag.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Read version
+        id: get_version
+        run: |
+          VERSION=$(cat version.txt | tr -d '[:space:]')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Detected version: ${VERSION}"
+
+      - name: Check if tag exists
+        id: check_tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag $VERSION already exists."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Tag $VERSION does not exist. Proceeding with release."
+          fi
+
+  build-windows:
+    needs: check-version
+    if: needs.check-version.outputs.tag_exists == 'false'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build Windows
+        run: |
+          wails build -platform windows/amd64
+
+      - name: Compress Artifact
+        run: |
+          cd build/bin
+          Compress-Archive -Path goCheckAmi.exe -DestinationPath ../../goCheckAmi_windows_amd64.zip
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: goCheckAmi_windows_amd64
+          path: goCheckAmi_windows_amd64.zip
+
+  build-linux:
+    needs: check-version
+    if: needs.check-version.outputs.tag_exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build Linux
+        run: |
+          wails build -platform linux/amd64
+
+      - name: Compress Artifact
+        run: |
+          cd build/bin
+          tar -czvf ../../goCheckAmi_linux_amd64.tar.gz goCheckAmi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: goCheckAmi_linux_amd64
+          path: goCheckAmi_linux_amd64.tar.gz
+
+  create-release:
+    needs: [check-version, build-windows, build-linux]
+    if: needs.check-version.outputs.tag_exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: goCheckAmi_windows_amd64
+          
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: goCheckAmi_linux_amd64
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.check-version.outputs.version }}
+          name: Release ${{ needs.check-version.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            goCheckAmi_windows_amd64.zip
+            goCheckAmi_linux_amd64.tar.gz
