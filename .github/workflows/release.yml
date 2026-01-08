@@ -76,6 +76,7 @@ jobs:
           name: goCheckAmi_windows_amd64
           path: goCheckAmi_windows_amd64.zip
 
+          
   build-linux:
     needs: check-version
     if: needs.check-version.outputs.tag_exists == 'false'
